@@ -1,27 +1,38 @@
 package ai.univs.univsmobilestreamer
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 
 class StreamingService : Service() {
 
     private lateinit var webRTCManager: WebRTCManager
 
+
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate() {
         super.onCreate()
         Log.d("StreamingService", "✅ onCreate() 호출됨")
         createNotificationChannel()
         startForeground(1, buildNotification())
 
-        webRTCManager = WebRTCManager(context = this, signalingUrl = "ws://192.168.0.14:7700")
+        webRTCManager = WebRTCManager(context = this, signalingUrl = "ws://192.168.0.36:7700")
         webRTCManager.start()
+
+
     }
 
     override fun onDestroy() {

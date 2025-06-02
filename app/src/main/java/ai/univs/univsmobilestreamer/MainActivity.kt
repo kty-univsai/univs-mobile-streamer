@@ -2,21 +2,15 @@ package ai.univs.univsmobilestreamer
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.Button
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import org.webrtc.*
-import okhttp3.*
-import okio.ByteString
-import android.util.Log
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
-
-    private lateinit var peerConnectionFactory: PeerConnectionFactory
-    private lateinit var peerConnection: PeerConnection
-    private lateinit var videoCapturer: VideoCapturer
-    private lateinit var videoTrack: VideoTrack
-    private lateinit var webSocket: WebSocket
 
     private val REQUEST_CODE_PERMISSIONS = 1001
     private val REQUIRED_PERMISSIONS = arrayOf(
@@ -25,12 +19,24 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        setContentView(R.layout.activity_main)
 
         if (allPermissionsGranted()) {
             startStreamingService()
         } else {
             requestPermissions(REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+        }
+
+
+        val reconnectButton = findViewById<Button>(R.id.btn_reconnect)
+        reconnectButton.setOnClickListener {
+            val stopIntent = Intent(this, StreamingService::class.java)
+            stopService(stopIntent)  // 현재 실행 중인 서비스 종료
+
+            Handler(Looper.getMainLooper()).postDelayed({
+                val startIntent = Intent(this, StreamingService::class.java)
+                ContextCompat.startForegroundService(this, startIntent)
+            }, 500) // 약
         }
     }
 

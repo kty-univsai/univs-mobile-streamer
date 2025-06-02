@@ -23,13 +23,18 @@ class WebRTCManager(private val context: Context,
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun start() {
+        try {
+            stop()
+        } catch (e: Exception) {
+            Log.e("WebRTC", "💥 stop() 중 예외 발생: ${e.message}")
+        }
         Log.d("WebRTC", "🚀 WebRTCManager starting")
 
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions()
         )
         val options = PeerConnectionFactory.Options()
-        val eglBase = EglBase.create()
+        eglBase = EglBase.create()
         val encoder = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
         val decoder = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
         peerConnectionFactory = PeerConnectionFactory.builder()
@@ -38,26 +43,36 @@ class WebRTCManager(private val context: Context,
             .setVideoDecoderFactory(decoder)
             .createPeerConnectionFactory()
 
-        val rtcConfig = PeerConnection.RTCConfiguration(listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
-        ))
+        val rtcConfig = PeerConnection.RTCConfiguration(emptyList())
+
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate?) {
-                Log.d("WebRTC", "ICE candidate: ${candidate?.sdp}")
+//                Log.d("WebRTC", "ICE candidate: ${candidate?.sdp}")
+//                candidate?.let {
+//                    val candidateJson = JSONObject().apply {
+//                        put("candidate", it.sdp)
+//                        put("sdpMid", it.sdpMid)
+//                        put("sdpMLineIndex", it.sdpMLineIndex)
+//                    }
+//
+//                    val messageJson = JSONObject().apply {
+//                        put("type", "candidate")
+//                        put("candidate", candidateJson)
+//                    }
+//
+//                    webSocket.send(messageJson.toString())
+//                }
                 candidate?.let {
                     val candidateJson = JSONObject().apply {
-                        put("candidate", it.sdp)
-                        put("sdpMid", it.sdpMid)
-                        put("sdpMLineIndex", it.sdpMLineIndex)
-                    }
-
-                    val messageJson = JSONObject().apply {
                         put("type", "candidate")
-                        put("candidate", candidateJson)
+                        put("candidate", JSONObject().apply {
+                            put("candidate", it.sdp)
+                            put("sdpMid", it.sdpMid)
+                            put("sdpMLineIndex", it.sdpMLineIndex)
+                        })
                     }
-
-                    webSocket.send(messageJson.toString())
+                    webSocket.send(candidateJson.toString())
                 }
             }
 
@@ -88,7 +103,7 @@ class WebRTCManager(private val context: Context,
         videoCapturer = Camera1Enumerator(false).run {
             deviceNames.mapNotNull { name -> if (isBackFacing(name)) createCapturer(name, null) else null }.first()
         }
-        val surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+        surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
         videoCapturer.initialize(surfaceHelper, context, videoSource.capturerObserver)
         videoCapturer.startCapture(1280, 720, 10)
 
@@ -99,6 +114,15 @@ class WebRTCManager(private val context: Context,
     }
 
     private fun initSignaling() {
+        if (::webSocket.isInitialized) {
+            Log.d("WebRTC", "🛑 이전 WebSocket 정리 중")
+            try {
+                webSocket.cancel()
+            } catch (e: Exception) {
+                Log.e("WebRTC", "WebSocket cancel 실패: ${e.message}")
+            }
+        }
+
         val client = OkHttpClient()
         val request = Request.Builder().url(signalingUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -145,16 +169,19 @@ class WebRTCManager(private val context: Context,
 
                         val sdp = msg.getString("sdp").replace("\\r\\n", "\r\n")
                         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
+                        if (::peerConnection.isInitialized) {
+                            if (peerConnection.signalingState() != PeerConnection.SignalingState.CLOSED) {
+                                peerConnection.setRemoteDescription(object : SdpObserver {
+                                    override fun onSetSuccess() {}
+                                    override fun onSetFailure(error: String?) {
+                                        Log.e("WebRTC", "Set remote SDP failed: $error")
+                                    }
 
-                        peerConnection.setRemoteDescription(object : SdpObserver {
-                            override fun onSetSuccess() {}
-                            override fun onSetFailure(error: String?) {
-                                Log.e("WebRTC", "Set remote SDP failed: $error")
-                            }
-
-                            override fun onCreateSuccess(desc: SessionDescription?) {}
-                            override fun onCreateFailure(error: String?) {}
+                                    override fun onCreateSuccess(desc: SessionDescription?) {}
+                                    override fun onCreateFailure(error: String?) {}
                         }, answer)
+                            }
+                        }
                     }
                     "candidate" -> {
                         val c = msg.getJSONObject("candidate")
@@ -163,7 +190,11 @@ class WebRTCManager(private val context: Context,
                             c.getInt("sdpMLineIndex"),
                             c.getString("candidate")
                         )
-                        peerConnection.addIceCandidate(ice)
+                        if (::peerConnection.isInitialized &&
+                            peerConnection.signalingState() != PeerConnection.SignalingState.CLOSED
+                        ) {
+                            peerConnection.addIceCandidate(ice)
+                        }
                     }
                 }
             }
@@ -182,11 +213,29 @@ class WebRTCManager(private val context: Context,
     }
 
     fun stop() {
-        videoCapturer.stopCapture()
+        webSocket.cancel()
+        try {
+            if (::surfaceHelper.isInitialized) {
+                surfaceHelper.dispose()
+            }
+        } catch (e: Exception) {
+            Log.e("WebRTC", "surfaceHelper release 중 오류: ${e.message}")
+        }
+
+        try {
+            videoCapturer.stopCapture()
+        } catch (e: Exception) {
+            Log.e("WebRTC", "stopCapture() error: ${e.message}")
+        }
         videoCapturer.dispose()
-        surfaceHelper.dispose()
+//        surfaceHelper.dispose()
         peerConnection.close()
         peerConnectionFactory.dispose()
         coroutineScope.cancel()
+    }
+
+    fun reconnectSignaling() {
+        stop()
+        start()
     }
 }
